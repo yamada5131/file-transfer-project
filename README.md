@@ -67,22 +67,7 @@ file-transfer-project/
 
 ## **Cài Đặt**
 
-### **1. Cài Đặt Thư Viện cJSON**
-
-Trước tiên, bạn cần cài đặt thư viện `cJSON` để xử lý JSON trong dự án.
-
-```bash
-# Tải mã nguồn cJSON
-git clone https://github.com/DaveGamble/cJSON.git
-
-# Di chuyển vào thư mục cJSON
-cd cJSON
-
-# Di chuyển file cJSON.c và cJSON.h vào thư mục common/
-mv cJSON.c cJSON.h /path/to/file-transfer-project/common/
-```
-
-### **2. Biên Dịch Dự Án**
+### **1. Biên Dịch Dự Án**
 
 Di chuyển đến folder /file-transfer-project, sử dụng `make` để biên dịch dự án.
 
@@ -91,7 +76,7 @@ cd /path/to/file-transfer-project/
 make
 ```
 
-### **3. Thiết Lập Thư Mục Dữ Liệu**
+### **2. Thiết Lập Thư Mục Dữ Liệu**
 
 Thư mục `data/` nằm cùng cấp với thư mục `server/` và `client/`. Mỗi người dùng sau khi đăng ký sẽ có một thư mục riêng trong `data/` với tên đăng nhập của họ.
 
