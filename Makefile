@@ -1,17 +1,13 @@
-CC = gcc
-CFLAGS = -Wall
-LIBS = -lcrypt
+.PHONY: all clean server client
 
 all: server client
 
-server: server.c user.o
-	$(CC) $(CFLAGS) -o server server.c user.o $(LIBS)
+server:
+	$(MAKE) -C server
 
-client: client.c
-	$(CC) $(CFLAGS) -o client client.c
-
-user.o: user.c
-	$(CC) $(CFLAGS) -c user.c
+client:
+	$(MAKE) -C client
 
 clean:
-	rm -f *.o server client
+	$(MAKE) -C server clean
+	$(MAKE) -C client clean
