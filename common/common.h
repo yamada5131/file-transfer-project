@@ -6,7 +6,6 @@
 #include <string.h>
 #include <stdint.h>
 
-// Kích thước bộ đệm
 #define BUFFER_SIZE 1024
 
 // Mã trạng thái

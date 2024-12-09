@@ -3,7 +3,7 @@ CFLAGS = -Wall -g -I. -I../common
 LDFLAGS = -L../common
 LIBS = -lcommon -lpthread
 
-SRCS = main.c server.c session.c handler.c data_manager.c
+SRCS = main.c server.c session.c handler.c user.c
 OBJS = $(SRCS:.c=.o)
 
 TARGET = server

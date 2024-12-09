@@ -1,8 +1,15 @@
 #include "handler.h"
-#include "data_manager.h"
+#include "../common/common.h"
+#include "../common/network.h"
+#include "user.h"
 #include <dirent.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 void handle_client_request(Session *session, const Message *msg) {
   if (strcmp(msg->type, MSG_TYPE_REGISTER) == 0) {
@@ -11,85 +18,86 @@ void handle_client_request(Session *session, const Message *msg) {
   } else if (strcmp(msg->type, MSG_TYPE_LOGIN) == 0) {
     printf("Gọi hàm handle_login.\n");
     handle_login(session, msg->data);
-  } else if (strcmp(msg->type, MSG_TYPE_UPLOAD) == 0) {
+  } else if (strcmp(msg->type, MSG_TYPE_UPLOAD) == 0 ||
+             strcmp(msg->type, MSG_TYPE_UPLOAD_FILE) == 0) {
     printf("Gọi hàm handle_upload.\n");
     handle_upload(session, msg->data);
   } else if (strcmp(msg->type, MSG_TYPE_DOWNLOAD) == 0) {
     printf("Gọi hàm handle_download.\n");
     handle_download(session, msg->data);
+  } else if (strcmp(msg->type, MSG_TYPE_UPLOAD_DIR) == 0) {
+    printf("Gọi hàm handle_upload_directory.\n");
+    handle_upload_directory(session, msg->data);
+  } else if (strcmp(msg->type, MSG_TYPE_DOWNLOAD_DIR) == 0) {
+    printf("Gọi hàm handle_download_directory.\n");
+    handle_download_directory(session, msg->data);
   } else {
     printf("Nhận được thông điệp không xác định.\n");
-    // Gửi phản hồi lỗi
-    cJSON *response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(response, "status", STATUS_BAD_REQUEST);
-    cJSON_AddStringToObject(response, "message", "Unknown command");
-    Message *resp_msg = create_message("RESPONSE", response);
-    send_message(session->socket, resp_msg);
-    free_message(resp_msg);
+    send_error_response(session->socket, STATUS_BAD_REQUEST, "Unknown command");
   }
 }
 
 // Triển khai các hàm xử lý cụ thể...
+//
+int create_directories(const char *dir) {
+  char tmp[512];
+  char *p = NULL;
+  size_t len;
+
+  snprintf(tmp, sizeof(tmp), "%s", dir);
+  len = strlen(tmp);
+  if (tmp[len - 1] == '/')
+    tmp[len - 1] = '\0';
+
+  for (p = tmp + 1; *p; p++) {
+    if (*p == '/') {
+      *p = '\0';
+      if (mkdir(tmp, 0777) != 0) {
+        if (errno != EEXIST) {
+          perror("Cannot create directory");
+          return -1;
+        }
+      }
+      *p = '/';
+    }
+  }
+  if (mkdir(tmp, 0777) != 0) {
+    if (errno != EEXIST) {
+      perror("Cannot create directory");
+      return -1;
+    }
+  }
+  return 0;
+}
 
 void handle_register(Session *session, cJSON *data) {
   printf("Xử lý yêu cầu đăng ký...\n");
-  printf("Nội dung data nhận được trong handle_register: %s\n",
-         cJSON_PrintUnformatted(data));
   // Lấy thông tin từ data
   cJSON *username_item = cJSON_GetObjectItem(data, "username");
   cJSON *password_item = cJSON_GetObjectItem(data, "password");
 
-  printf("username_item: %p, password_item: %p\n", (void *)username_item,
-         (void *)password_item);
-
   if (!username_item || !password_item || !cJSON_IsString(username_item) ||
       !cJSON_IsString(password_item)) {
     printf("username_item hoặc password_item không hợp lệ.\n");
-    // Gửi phản hồi lỗi
-    cJSON *response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(response, "status", STATUS_BAD_REQUEST);
-    cJSON_AddStringToObject(response, "message",
-                            "Invalid username or password");
-    Message *resp_msg = create_message("RESPONSE", response);
-    send_message(session->socket, resp_msg);
-    free_message(resp_msg);
+    send_error_response(session->socket, STATUS_BAD_REQUEST,
+                        "Invalid username or password");
     return;
   }
 
-  printf("2...\n");
   const char *username = username_item->valuestring;
   const char *password = password_item->valuestring;
 
-  printf("Username: %s, Password: %s\n", username, password);
-
   if (check_user_exists(username)) {
-    // Gửi phản hồi lỗi
-    cJSON *response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(response, "status", STATUS_BAD_REQUEST);
-    cJSON_AddStringToObject(response, "message", "Username already exists");
-    Message *resp_msg = create_message("RESPONSE", response);
-    send_message(session->socket, resp_msg);
-    free_message(resp_msg);
+    send_error_response(session->socket, STATUS_BAD_REQUEST,
+                        "Username already exists");
     return;
   }
 
-  // Thêm người dùng mới
   if (add_user(username, password) == 0) {
-    // Gửi phản hồi thành công
-    cJSON *response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(response, "status", STATUS_OK);
-    cJSON_AddStringToObject(response, "message", "Register successful");
-    Message *resp_msg = create_message("RESPONSE", response);
-    send_message(session->socket, resp_msg);
-    free_message(resp_msg);
+    send_success_response(session->socket, "Register successful");
   } else {
-    // Gửi phản hồi lỗi
-    cJSON *response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(response, "status", STATUS_INTERNAL_SERVER_ERROR);
-    cJSON_AddStringToObject(response, "message", "Internal server error");
-    Message *resp_msg = create_message("RESPONSE", response);
-    send_message(session->socket, resp_msg);
-    free_message(resp_msg);
+    send_error_response(session->socket, STATUS_INTERNAL_SERVER_ERROR,
+                        "Internal server error");
   }
 }
 
@@ -100,159 +108,39 @@ void handle_login(Session *session, cJSON *data) {
 
   if (!username_item || !password_item || !cJSON_IsString(username_item) ||
       !cJSON_IsString(password_item)) {
-    // Gửi phản hồi lỗi
-    cJSON *response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(response, "status", STATUS_BAD_REQUEST);
-    cJSON_AddStringToObject(response, "message",
-                            "Invalid username or password format");
-    Message *resp_msg = create_message("RESPONSE", response);
-    send_message(session->socket, resp_msg);
-    free_message(resp_msg);
+    send_error_response(session->socket, STATUS_BAD_REQUEST,
+                        "Invalid username or password format");
     return;
   }
 
   const char *username = username_item->valuestring;
   const char *password = password_item->valuestring;
 
-  // Xác thực người dùng
   if (authenticate_user(username, password)) {
-    // Cập nhật trạng thái phiên làm việc
     session->is_logged_in = 1;
     strcpy(session->username, username);
-
-    // Gửi phản hồi thành công
-    cJSON *response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(response, "status", STATUS_OK);
-    cJSON_AddStringToObject(response, "message", "Login successful");
-    Message *resp_msg = create_message("RESPONSE", response);
-    send_message(session->socket, resp_msg);
-    free_message(resp_msg);
+    send_success_response(session->socket, "Login successful");
   } else {
-    // Gửi phản hồi lỗi
-    cJSON *response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(response, "status", STATUS_UNAUTHORIZED);
-    cJSON_AddStringToObject(response, "message",
-                            "Invalid username or password");
-    Message *resp_msg = create_message("RESPONSE", response);
-    send_message(session->socket, resp_msg);
-    free_message(resp_msg);
+    send_error_response(session->socket, STATUS_UNAUTHORIZED,
+                        "Invalid username or password");
   }
 }
 
 void handle_upload(Session *session, cJSON *data) {
-  // Kiểm tra xem người dùng đã đăng nhập chưa
   if (!session->is_logged_in) {
-    // Gửi phản hồi lỗi
-    cJSON *response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(response, "status", STATUS_UNAUTHORIZED);
-    cJSON_AddStringToObject(response, "message", "Please login first");
-    Message *resp_msg = create_message("RESPONSE", response);
-    send_message(session->socket, resp_msg);
-    free_message(resp_msg);
+    send_error_response(session->socket, STATUS_UNAUTHORIZED,
+                        "Please login first");
     return;
   }
 
-  // Lấy thông tin filename và filesize từ data
-  cJSON *filename_item = cJSON_GetObjectItem(data, "filename");
-  cJSON *filesize_item = cJSON_GetObjectItem(data, "filesize");
-
-  if (!filename_item || !filesize_item || !cJSON_IsString(filename_item) ||
-      !cJSON_IsNumber(filesize_item)) {
-    // Gửi phản hồi lỗi
-    cJSON *response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(response, "status", STATUS_BAD_REQUEST);
-    cJSON_AddStringToObject(response, "message",
-                            "Invalid filename or filesize");
-    Message *resp_msg = create_message("RESPONSE", response);
-    send_message(session->socket, resp_msg);
-    free_message(resp_msg);
-    return;
-  }
-
-  const char *filename = filename_item->valuestring;
-  int64_t filesize = (int64_t)filesize_item->valuedouble;
-
-  // Tạo thư mục người dùng nếu chưa tồn tại
-  char user_dir[256];
-  snprintf(user_dir, sizeof(user_dir), "../data/%s", session->username);
-  mkdir("../data", 0777); // Tạo thư mục data nếu chưa tồn tại
-  mkdir(user_dir, 0777);  // Tạo thư mục người dùng
-
-  // Xây dựng đường dẫn đầy đủ để lưu file
-  char full_path[512];
-  snprintf(full_path, sizeof(full_path), "%s/%s", user_dir, filename);
-
-  // Gửi phản hồi sẵn sàng nhận dữ liệu
-  cJSON *response = cJSON_CreateObject();
-  cJSON_AddNumberToObject(response, "status", STATUS_OK);
-  cJSON_AddStringToObject(response, "message", "Ready to receive data");
-  Message *resp_msg = create_message("RESPONSE", response);
-  send_message(session->socket, resp_msg);
-  free_message(resp_msg);
-
-  // Nhận dữ liệu file
-  FILE *fp = fopen(full_path, "wb");
-  if (fp == NULL) {
-    perror("Cannot create file");
-    // Gửi phản hồi lỗi
-    cJSON *error_response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(error_response, "status",
-                            STATUS_INTERNAL_SERVER_ERROR);
-    cJSON_AddStringToObject(error_response, "message",
-                            "Failed to create file on server");
-    Message *error_msg = create_message("RESPONSE", error_response);
-    send_message(session->socket, error_msg);
-    free_message(error_msg);
-    return;
-  }
-
-  char buffer[BUFFER_SIZE];
-  int64_t total_received = 0;
-  ssize_t bytes_received;
-
-  while (total_received < filesize) {
-    bytes_received = recv(session->socket, buffer, sizeof(buffer), 0);
-    if (bytes_received <= 0) {
-      perror("Error receiving file data");
-      break;
-    }
-    fwrite(buffer, 1, bytes_received, fp);
-    total_received += bytes_received;
-  }
-
-  fclose(fp);
-
-  if (total_received == filesize) {
-    // Gửi phản hồi thành công
-    cJSON *success_response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(success_response, "status", STATUS_OK);
-    cJSON_AddStringToObject(success_response, "message",
-                            "File uploaded successfully");
-    Message *success_msg = create_message("RESPONSE", success_response);
-    send_message(session->socket, success_msg);
-    free_message(success_msg);
-  } else {
-    // Gửi phản hồi lỗi
-    cJSON *error_response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(error_response, "status",
-                            STATUS_INTERNAL_SERVER_ERROR);
-    cJSON_AddStringToObject(error_response, "message", "File upload failed");
-    Message *error_msg = create_message("RESPONSE", error_response);
-    send_message(session->socket, error_msg);
-    free_message(error_msg);
-  }
+  // Gọi hàm xử lý upload file
+  handle_upload_file(session, data);
 }
 
 void handle_download(Session *session, cJSON *data) {
-  // Kiểm tra xem người dùng đã đăng nhập chưa
   if (!session->is_logged_in) {
-    // Gửi phản hồi lỗi
-    cJSON *response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(response, "status", STATUS_UNAUTHORIZED);
-    cJSON_AddStringToObject(response, "message", "Please login first");
-    Message *resp_msg = create_message("RESPONSE", response);
-    send_message(session->socket, resp_msg);
-    free_message(resp_msg);
+    send_error_response(session->socket, STATUS_UNAUTHORIZED,
+                        "Please login first");
     return;
   }
 
@@ -260,13 +148,8 @@ void handle_download(Session *session, cJSON *data) {
   cJSON *filename_item = cJSON_GetObjectItem(data, "filename");
 
   if (!filename_item || !cJSON_IsString(filename_item)) {
-    // Gửi phản hồi lỗi
-    cJSON *response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(response, "status", STATUS_BAD_REQUEST);
-    cJSON_AddStringToObject(response, "message", "Invalid filename");
-    Message *resp_msg = create_message("RESPONSE", response);
-    send_message(session->socket, resp_msg);
-    free_message(resp_msg);
+    send_error_response(session->socket, STATUS_BAD_REQUEST,
+                        "Invalid filename");
     return;
   }
 
@@ -274,24 +157,13 @@ void handle_download(Session *session, cJSON *data) {
 
   // Xây dựng đường dẫn đầy đủ đến file
   char full_path[512];
-  snprintf(full_path, sizeof(full_path), "../data/%s/%s", session->username,
+  snprintf(full_path, sizeof(full_path), "data/%s/%s", session->username,
            filename);
-
-  // Thêm log để in ra đường dẫn đầy đủ
-  printf("Đường dẫn đầy đủ tới file: %s\n", full_path);
 
   // Mở file để đọc
   FILE *fp = fopen(full_path, "rb");
   if (fp == NULL) {
-    // Log lỗi chi tiết
-    perror("Error opening file");
-    // Gửi phản hồi lỗi
-    cJSON *response = cJSON_CreateObject();
-    cJSON_AddNumberToObject(response, "status", STATUS_NOT_FOUND);
-    cJSON_AddStringToObject(response, "message", "File not found");
-    Message *resp_msg = create_message("RESPONSE", response);
-    send_message(session->socket, resp_msg);
-    free_message(resp_msg);
+    send_error_response(session->socket, STATUS_NOT_FOUND, "File not found");
     return;
   }
 
@@ -314,7 +186,244 @@ void handle_download(Session *session, cJSON *data) {
   size_t bytes_read;
 
   while ((bytes_read = fread(buffer, 1, sizeof(buffer), fp)) > 0) {
-    if (send(session->socket, buffer, bytes_read, 0) < 0) {
+    if (send_data(session->socket, buffer, bytes_read) < 0) {
+      perror("Error sending file data");
+      break;
+    }
+  }
+
+  fclose(fp);
+}
+
+void handle_upload_file(Session *session, cJSON *data) {
+  // Extract filename and filesize from data
+  cJSON *filename_item = cJSON_GetObjectItem(data, "filename");
+  cJSON *filesize_item = cJSON_GetObjectItem(data, "filesize");
+
+  if (!filename_item || !filesize_item || !cJSON_IsString(filename_item) ||
+      !cJSON_IsNumber(filesize_item)) {
+    send_error_response(session->socket, STATUS_BAD_REQUEST,
+                        "Invalid filename or filesize");
+    return;
+  }
+
+  const char *filename = filename_item->valuestring;
+  int64_t filesize = (int64_t)filesize_item->valuedouble;
+
+  // Build the full path to save the file, including the user's directory
+  char full_path[512];
+  snprintf(full_path, sizeof(full_path), "data/%s/%s", session->username,
+           filename);
+
+  // Create parent directories recursively
+  char dir_path[512];
+  strncpy(dir_path, full_path, sizeof(dir_path));
+  dir_path[sizeof(dir_path) - 1] = '\0';
+  char *last_slash = strrchr(dir_path, '/');
+  if (last_slash) {
+    *last_slash = '\0'; // Remove filename to get directory path
+    if (create_directories(dir_path) != 0) {
+      send_error_response(session->socket, STATUS_INTERNAL_SERVER_ERROR,
+                          "Failed to create directories on server");
+      return;
+    }
+  }
+
+  // Send response indicating readiness to receive the file
+  send_success_response(session->socket, "Ready to receive file");
+
+  // Receive the file data using receive_data()
+  FILE *fp = fopen(full_path, "wb");
+  if (fp == NULL) {
+    perror("Cannot create file");
+    send_error_response(session->socket, STATUS_INTERNAL_SERVER_ERROR,
+                        "Failed to create file on server");
+    return;
+  }
+
+  char buffer[BUFFER_SIZE];
+  int64_t remaining = filesize;
+  while (remaining > 0) {
+    ssize_t to_read = (remaining < BUFFER_SIZE) ? remaining : BUFFER_SIZE;
+    if (receive_data(session->socket, buffer, (size_t)to_read) < 0) {
+      perror("Error receiving file data");
+      break;
+    }
+    fwrite(buffer, 1, to_read, fp);
+    remaining -= to_read;
+  }
+
+  fclose(fp);
+
+  if (remaining == 0) {
+    printf("File %s received successfully.\n", filename);
+  } else {
+    printf("Error receiving file %s.\n", filename);
+  }
+}
+
+void handle_upload_directory(Session *session, cJSON *data) {
+  if (!session->is_logged_in) {
+    send_error_response(session->socket, STATUS_UNAUTHORIZED,
+                        "Please login first");
+    return;
+  }
+
+  send_success_response(session->socket, "Ready to receive directory");
+
+  // Nhận thư mục
+  receive_directory(session);
+}
+
+void handle_download_directory(Session *session, cJSON *data) {
+  if (!session->is_logged_in) {
+    send_error_response(session->socket, STATUS_UNAUTHORIZED,
+                        "Please login first");
+    return;
+  }
+
+  cJSON *dir_name_item = cJSON_GetObjectItem(data, "dir_name");
+  if (!dir_name_item || !cJSON_IsString(dir_name_item)) {
+    send_error_response(session->socket, STATUS_BAD_REQUEST,
+                        "Invalid directory name");
+    return;
+  }
+
+  // Kiểm tra thư mục có tồn tại không
+  char full_path[512];
+  snprintf(full_path, sizeof(full_path), "data/%s/%s", session->username,
+           dir_name_item->valuestring);
+
+  DIR *dir = opendir(full_path);
+  if (!dir) {
+    send_error_response(session->socket, STATUS_NOT_FOUND,
+                        "Directory not found");
+    return;
+  }
+  closedir(dir);
+
+  send_success_response(session->socket, "Ready to send directory");
+
+  // Gửi thư mục
+  send_directory(session->socket, full_path, full_path);
+}
+
+// Hàm nhận thư mục từ client
+
+void receive_directory(Session *session) {
+  while (1) {
+    Message *msg = receive_message(session->socket);
+    if (!msg) {
+      break;
+    }
+
+    if (strcmp(msg->type, MSG_TYPE_MKDIR) == 0) {
+      cJSON *dir_name_item = cJSON_GetObjectItem(msg->data, "dir_name");
+      if (dir_name_item && cJSON_IsString(dir_name_item)) {
+        char full_path[512];
+        snprintf(full_path, sizeof(full_path), "data/%s/%s", session->username,
+                 dir_name_item->valuestring);
+        if (create_directories(full_path) != 0) {
+          send_error_response(session->socket, STATUS_INTERNAL_SERVER_ERROR,
+                              "Failed to create directories on server");
+          free_message(msg);
+          return;
+        }
+      }
+      free_message(msg);
+
+      // Sau khi MKDIR, gọi đệ quy receive_directory để xử lý thư mục con
+      receive_directory(session);
+      // Sau khi hàm trên kết thúc, nghĩa là đã gặp END_OF_DIR của thư mục con
+      // Tiếp tục vòng lặp để xử lý tiếp các entry khác (nếu có)
+      continue;
+    } else if (strcmp(msg->type, MSG_TYPE_UPLOAD_FILE) == 0) {
+      handle_upload_file(session, msg->data);
+      free_message(msg);
+    } else if (strcmp(msg->type, MSG_TYPE_END_OF_DIR) == 0) {
+      free_message(msg);
+      break; // Kết thúc thư mục hiện tại
+    } else {
+      send_error_response(session->socket, STATUS_BAD_REQUEST,
+                          "Unknown command");
+      free_message(msg);
+    }
+  }
+}
+
+// Hàm gửi thư mục tới client
+void send_directory(int socket, const char *dir_path, const char *base_path) {
+  DIR *dir = opendir(dir_path);
+  if (!dir) {
+    return;
+  }
+
+  struct dirent *entry;
+  char path[1024];
+
+  while ((entry = readdir(dir)) != NULL) {
+    // Bỏ qua '.' và '..'
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+      continue;
+    }
+
+    snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
+
+    struct stat st;
+    stat(path, &st);
+
+    if (S_ISDIR(st.st_mode)) {
+      // Gửi thông điệp tạo thư mục
+      cJSON *data = cJSON_CreateObject();
+      cJSON_AddStringToObject(data, "dir_name", path + strlen(base_path) + 1);
+      Message *msg = create_message(MSG_TYPE_MKDIR, data);
+      send_message(socket, msg);
+      free_message(msg);
+
+      // Đệ quy gửi thư mục con
+      send_directory(socket, path, base_path);
+    } else if (S_ISREG(st.st_mode)) {
+      // Gửi file
+      char relative_path[1024];
+      snprintf(relative_path, sizeof(relative_path), "%s",
+               path + strlen(base_path) + 1);
+      send_file(socket, path, relative_path);
+    }
+  }
+  closedir(dir);
+
+  // Gửi thông điệp kết thúc thư mục
+  Message *end_msg = create_message(MSG_TYPE_END_OF_DIR, NULL);
+  send_message(socket, end_msg);
+  free_message(end_msg);
+}
+
+// Hàm gửi file tới client
+void send_file(int socket, const char *full_path, const char *relative_path) {
+  FILE *fp = fopen(full_path, "rb");
+  if (fp == NULL) {
+    return;
+  }
+
+  // Lấy kích thước file
+  fseek(fp, 0L, SEEK_END);
+  int64_t filesize = ftell(fp);
+  fseek(fp, 0L, SEEK_SET);
+
+  // Tạo thông điệp gửi file
+  cJSON *data = cJSON_CreateObject();
+  cJSON_AddStringToObject(data, "filename", relative_path);
+  cJSON_AddNumberToObject(data, "filesize", (double)filesize);
+  Message *msg = create_message(MSG_TYPE_FILE, data);
+  send_message(socket, msg);
+  free_message(msg);
+
+  // Gửi dữ liệu file
+  char buffer[BUFFER_SIZE];
+  size_t bytes_read;
+
+  while ((bytes_read = fread(buffer, 1, sizeof(buffer), fp)) > 0) {
+    if (send_data(socket, buffer, bytes_read) < 0) {
       perror("Error sending file data");
       break;
     }

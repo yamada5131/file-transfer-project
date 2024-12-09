@@ -1,19 +1,17 @@
+// session.h
+
 #ifndef SESSION_H
 #define SESSION_H
 
-#include "../common/common.h"
-
+// Cấu trúc phiên làm việc cho server
 typedef struct {
     int socket;
     int is_logged_in;
     char username[50];
-    // Các thuộc tính khác nếu cần
 } Session;
 
-// Hàm tạo phiên làm việc mới
-Session* create_session(int socket);
-
-// Hàm giải phóng phiên làm việc
+// Hàm cho server
+Session *create_session(int socket);
 void free_session(Session *session);
 
 #endif // SESSION_H

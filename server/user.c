@@ -1,12 +1,16 @@
-#include "data_manager.h"
+// data_manager.c
+
+#include "user.h"
 #include <pthread.h>
+#include <stdio.h>
+#include <string.h>
 
 static pthread_mutex_t user_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int check_user_exists(const char *username) {
   pthread_mutex_lock(&user_mutex);
 
-  FILE *fp = fopen("../users.txt", "r");
+  FILE *fp = fopen("users.txt", "r");
   if (fp == NULL) {
     pthread_mutex_unlock(&user_mutex);
     return 0;
@@ -14,11 +18,10 @@ int check_user_exists(const char *username) {
 
   char line[256];
   char file_username[50];
-  char file_password[50];
   int exists = 0;
 
   while (fgets(line, sizeof(line), fp)) {
-    sscanf(line, "%s %s", file_username, file_password);
+    sscanf(line, "%s", file_username);
     if (strcmp(file_username, username) == 0) {
       exists = 1;
       break;
@@ -33,7 +36,7 @@ int check_user_exists(const char *username) {
 int add_user(const char *username, const char *password) {
   pthread_mutex_lock(&user_mutex);
 
-  FILE *fp = fopen("../users.txt", "a");
+  FILE *fp = fopen("users.txt", "a");
   if (fp == NULL) {
     pthread_mutex_unlock(&user_mutex);
     printf("Không thể mở tệp users.txt để ghi.\n");
@@ -51,7 +54,7 @@ int add_user(const char *username, const char *password) {
 int authenticate_user(const char *username, const char *password) {
   pthread_mutex_lock(&user_mutex);
 
-  FILE *fp = fopen("../users.txt", "r");
+  FILE *fp = fopen("users.txt", "r");
   if (fp == NULL) {
     pthread_mutex_unlock(&user_mutex);
     printf("Không thể mở tệp users.txt để đọc.\n");
@@ -78,5 +81,3 @@ int authenticate_user(const char *username, const char *password) {
   printf("Kết quả xác thực cho %s: %d\n", username, authenticated);
   return authenticated;
 }
-
-// ... các hàm khác nếu cần ...
